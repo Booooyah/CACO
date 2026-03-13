@@ -1,0 +1,93 @@
+import caco
+import numpy as np
+from sklearn.model_selection import KFold
+from sklearn.metrics import roc_curve, auc
+
+
+def run_sensitivity_analysis():
+    """
+    Run 5-Fold Cross-Validation to test Kernel Functions and Hyperparameter Sensitivity.
+    """
+    # 1. Base Configuration (Focusing on Model I Tree)
+    dim = 20
+    size = 150  # 稍微调小一点，防止你的电脑跑太久
+    y_target_quantile = 0.5  # Validate at y=0.5
+    t_type = 'balanced'
+    m_type = 'Model I Tree'
+    t_kernel = 'rbf'
+
+    print(f"--- Generating synthetic data for {m_type} ---")
+    np.random.seed(42)  # For reproducibility
+    observe_point, g_t = caco.generate_t(size, t_type, 1200)
+    samples = caco.gen_sample(observe_point, 50, m_type, dim, g_t, t_kernel)
+
+    X_full = samples[0]
+    Y_full = np.array(samples[1])
+    E_true = samples[2]
+
+    # 2. Setup Grid Search Space
+    kernel_types = ['rbf', 'poly']
+    scale_factors = [0.5, 1.0, 2.0]  # 0.5x, 1.0x (default n^{-1/5}), 2.0x
+
+    # Real 5-Fold Cross Validation
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    results = {}
+
+    print("--- Starting 5-Fold Cross Validation ---")
+    for k_type in kernel_types:
+        results[k_type] = {}
+        for scale in scale_factors:
+            print(f"\n[Testing] Kernel: {k_type.upper()} | Param Scale: {scale}x")
+            auc_list = []
+
+            fold = 1
+            # Subsetting for K-fold
+            for train_idx, _ in kf.split(X_full):
+                # In graphical models, we use the train_idx to estimate the precision network
+                X_train = [X_full[i] for i in train_idx]
+                Y_train = Y_full[train_idx]
+                obs_pt_train = [observe_point[i] for i in train_idx]
+
+                # Model Pipeline
+                X_c = caco.cal_coor(X_train, obs_pt_train, t_type, g_t, t_kernel, scale_factor=scale)
+
+                K_X = caco.kernel_x_mat(X_train, X_c, obs_pt_train, g_t, t_kernel, kernel_x_type=k_type)
+                K_2 = caco.kernel_x_inv(K_X, scale_factor=scale)
+                K_Y, gamma = caco.kernel_y_mat(Y_train, kernel_y_type=k_type)
+
+                # Estimate precision operator at target Y
+                y_val = np.quantile(Y_train, y_target_quantile)
+                precision_mat = caco.precision_operator_norm(
+                    y_val, K_X, K_2, K_Y, Y_train, gamma,
+                    scale_factor=scale, kernel_xy_type=k_type
+                )
+
+                # Calculate AUC against True Graph
+                y_pred = caco.upper_tri(precision_mat)
+                y_true = caco.upper_tri(E_true)
+                fpr, tpr, _ = roc_curve(y_true, y_pred, drop_intermediate=False)
+                roc_auc = auc(fpr, tpr)
+
+                print(f"  Fold {fold} | AUC: {roc_auc:.4f}")
+                auc_list.append(roc_auc)
+                fold += 1
+
+            mean_auc = np.mean(auc_list)
+            results[k_type][scale] = mean_auc
+            print(f"  --> Average AUC for {k_type.upper()} (Scale {scale}x): {mean_auc:.4f}")
+
+    # 3. Print Final Sensitivity Table
+    print("\n==================================================")
+    print("      SENSITIVITY ANALYSIS RESULTS (5-FOLD CV)    ")
+    print("==================================================")
+    print("Scale Factor\t| RBF Kernel AUC\t| Polynomial Kernel AUC")
+    print("-" * 50)
+    for scale in scale_factors:
+        rbf_auc = results['rbf'][scale]
+        poly_auc = results['poly'][scale]
+        print(f"{scale}x\t\t| {rbf_auc:.4f}\t\t\t| {poly_auc:.4f}")
+    print("==================================================")
+
+
+if __name__ == '__main__':
+    run_sensitivity_analysis()
