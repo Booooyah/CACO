@@ -280,7 +280,8 @@ def gen_sample(t, m, graph_type, dim, g_t, kernel_type):
         return[out, y, cov]
 
 
-def cal_coor(x, t, t_type, g_t, kernel_type):
+def cal_coor(x, t, t_type, g_t, kernel_type, scale_factor=1.0):
+    """Calculate the coordinate representation with a scaling factor for CV."""
     t_merged = t[0]
     for i in range(1, len(t)):
         t_merged = np.append(t_merged, t[i], axis=0)
@@ -293,7 +294,8 @@ def cal_coor(x, t, t_type, g_t, kernel_type):
     if t_type == 'balanced':
         temp = kernel_t_mat(t[0], t[0], g_t, kernel_type)
         lam = np.real(max(np.linalg.eigvalsh(temp)))
-        temp = np.linalg.inv(temp + lam / (len(t[0]) ** (1 / 5)) * np.identity(len(t[0])))
+        # Added scale_factor for hyperparameter tuning
+        temp = np.linalg.inv(temp + scale_factor * lam / (len(t[0]) ** (1 / 5)) * np.identity(len(t[0])))
         for i in range(n):
             out_i = np.matmul(temp, x[i])
             x_i = np.asmatrix(np.zeros((l, p), dtype=type(out_i[0, 0])))
@@ -303,7 +305,8 @@ def cal_coor(x, t, t_type, g_t, kernel_type):
         for i in range(n):
             temp = kernel_t_mat(t[i], t[i], g_t, kernel_type)
             lam = np.real(max(np.linalg.eigvalsh(temp)))
-            temp = np.linalg.inv(temp + lam / (len(t[i]) ** (1 / 5)) * np.identity(len(t[i])))
+            # Added scale_factor for hyperparameter tuning
+            temp = np.linalg.inv(temp + scale_factor * lam / (len(t[i]) ** (1 / 5)) * np.identity(len(t[i])))
             out_i = np.matmul(temp, x[i])
             x_i = np.asmatrix(np.zeros((l, p), dtype=type(out_i[0, 0])))
             x_i[np.where(t_merged == t[i][:, None])[-1], :] = out_i
@@ -311,7 +314,8 @@ def cal_coor(x, t, t_type, g_t, kernel_type):
     return out
 
 
-def kernel_x_mat(x, c, t, g_t, kernel_type):
+def kernel_x_mat(x, c, t, g_t, kernel_type, kernel_x_type='rbf'):
+    """Generate Gram matrix for X using RBF or Polynomial kernel."""
     n = len(x)
     dim = x[0].shape[1]
 
@@ -324,106 +328,133 @@ def kernel_x_mat(x, c, t, g_t, kernel_type):
     u_2 = max(t_merged)
     l = 99
     t_integral = np.linspace(u_1, u_2, l, endpoint=True)
-    h = (u_2 - u_1)/l
-    d = h / 3 * np.diag([1] + [4, 2] * int((l - 3)/2) + [4, 1])
+    h = (u_2 - u_1) / l
+    d = h / 3 * np.diag([1] + [4, 2] * int((l - 3) / 2) + [4, 1])
 
     k = kernel_t_mat(t_integral, t_merged, g_t, kernel_type)
     metric = np.matmul(d, k)
     metric = np.matmul(k.T, metric)
 
-    gam = list()
-    temp = list()
+    out = list()
     for p in range(dim):
         m_p = np.asmatrix(np.zeros((len(t_merged), 1), dtype=int))
         for i in range(n):
             m_p = np.append(m_p, c[i][:, p], axis=1)
         m_p = np.delete(m_p, 0, axis=1)
 
+        # G is the inner product matrix <X_i, X_j>
         G = np.matmul(m_p.T, np.matmul(metric, m_p))
 
-        temp_k = list()
-        g = 0
-        for i in range(n):
-            temp_ki = list()
-            for j in range(i, n):
-                norm = G[i, i] - G[i, j] - G[j, i] + G[j, j]
-                temp_ki.append(norm)
-                g = g + math.sqrt(norm)
-            temp_k.append(temp_ki)
-        temp.append(temp_k)
-        g = 2 / (n * (n - 1)) * g
-        g = 1 / (g * g)
-        gam.append(g)
+        if kernel_x_type == 'rbf':
+            g = 0
+            temp_k = list()
+            for i in range(n):
+                temp_ki = list()
+                for j in range(i, n):
+                    norm = G[i, i] - G[i, j] - G[j, i] + G[j, j]
+                    temp_ki.append(norm)
+                    g = g + math.sqrt(norm)
+                temp_k.append(temp_ki)
+            g = 2 / (n * (n - 1)) * g
+            g = 1 / (g * g)
 
-    out = list()
-    for p in range(dim):
-        out_p = list()
-        for i in range(n):
-            k_i = [0] * i
-            for j in range(i, n):
-                k_ij = math.exp(- gam[p] * temp[p][i][j-i])
-                k_i = k_i + [k_ij]
-            out_p.append(k_i)
-        out_p = np.asmatrix(out_p)
-        out_p = (out_p + out_p.T) - np.diag(np.diagonal(out_p))
-        out.append(out_p)
+            out_p = list()
+            for i in range(n):
+                k_i = [0] * i
+                for j in range(i, n):
+                    k_ij = math.exp(- g * temp_k[i][j - i])
+                    k_i.append(k_ij)
+                out_p.append(k_i)
+            out_p = np.asmatrix(out_p)
+            out_p = (out_p + out_p.T) - np.diag(np.diagonal(out_p))
+            out.append(out_p)
+
+        elif kernel_x_type == 'poly':
+            out_p = list()
+            for i in range(n):
+                k_i = [0] * i
+                for j in range(i, n):
+                    # Polynomial kernel: k(x,y) = (1 + <x,y>)^2
+                    k_ij = (1 + G[i, j]) ** 2
+                    k_i.append(k_ij)
+                out_p.append(k_i)
+            out_p = np.asmatrix(out_p)
+            out_p = (out_p + out_p.T) - np.diag(np.diagonal(out_p))
+            out.append(out_p)
+
     return out
 
 
-def kernel_x_inv(k_x):
+def kernel_x_inv(k_x, scale_factor=1.0):
+    """Inverse of the kernel matrix with hyperparameter scale scaling."""
     out = list()
     n = k_x[0].shape[0]
     for i in range(len(k_x)):
         lam_i = np.real(max(np.linalg.eigvals(k_x[i])))
-        k_i_inv = np.linalg.inv(k_x[i] + lam_i / (n ** (1 / 5)) * np.identity(n))
+        k_i_inv = np.linalg.inv(k_x[i] + scale_factor * lam_i / (n ** (1 / 5)) * np.identity(n))
         out.append(np.matmul(k_i_inv, k_x[i]))
     return out
 
 
-def kernel_y_mat(y):
+def kernel_y_mat(y, kernel_y_type='rbf'):
+    """Generate Gram matrix for external covariate Y."""
     n = len(y)
-    g = 0
-    for i in range(n - 1):
-        for j in range(i + 1, n):
-            g = g + abs(y[i] - y[j])
-    g = 2 / (n * (n - 1)) * g
-    g = 1 / (g * g)
-
     out = list()
-    for i in range(n):
-        row = [0] * i
-        for j in range(i, n):
-            row = row + [math.exp(- g * (y[i] - y[j]) * (y[i] - y[j]))]
-        out.append(row)
-    out = np.asmatrix(out)
-    out = out + out.T - np.diag(np.diagonal(out))
-    return [out, g]
+    if kernel_y_type == 'rbf':
+        g = 0
+        for i in range(n - 1):
+            for j in range(i + 1, n):
+                g = g + abs(y[i] - y[j])
+        g = 2 / (n * (n - 1)) * g
+        g = 1 / (g * g)
+
+        for i in range(n):
+            row = [0] * i
+            for j in range(i, n):
+                row.append(math.exp(- g * (y[i] - y[j]) * (y[i] - y[j])))
+            out.append(row)
+        out = np.asmatrix(out)
+        out = out + out.T - np.diag(np.diagonal(out))
+        return [out, g]
+
+    elif kernel_y_type == 'poly':
+        for i in range(n):
+            row = [0] * i
+            for j in range(i, n):
+                row.append((1 + y[i] * y[j]) ** 2)
+            out.append(row)
+        out = np.asmatrix(out)
+        out = out + out.T - np.diag(np.diagonal(out))
+        return [out, 1.0]  # Dummy gamma for poly
 
 
-def precision_operator_norm(y, k_x, k_2, k_y, sample_y, gam_y):
+def precision_operator_norm(y, k_x, k_2, k_y, sample_y, gam_y, scale_factor=1.0, kernel_xy_type='rbf'):
+    """Compute the precision operator norm using cross-validation scaling."""
     n = k_x[0].shape[0]
     p = len(k_x)
     y_vec = list()
 
-    for a in range(len(sample_y)):
-        y_vec.append(math.exp(- gam_y * (y - sample_y[a]) * (y - sample_y[a])))
+    if kernel_xy_type == 'rbf':
+        for a in range(len(sample_y)):
+            y_vec.append(math.exp(- gam_y * (y - sample_y[a]) * (y - sample_y[a])))
+    elif kernel_xy_type == 'poly':
+        for a in range(len(sample_y)):
+            y_vec.append((1 + y * sample_y[a]) ** 2)
+
     y_vec = np.asmatrix(y_vec).T
 
     lam = np.real(max(np.linalg.eig(k_y)[0]))
-    k_y_inv = np.linalg.inv(k_y + lam / (n ** (1/5)) * np.identity(n))
+    k_y_inv = np.linalg.inv(k_y + scale_factor * lam / (n ** (1 / 5)) * np.identity(n))
     v = np.matmul(k_y_inv, y_vec)
     mu = np.matmul(v, v.T)
     L = np.asmatrix(np.diag(v.T.tolist()[0]))
 
-    t1 = time.time()
     s = list()
     k_1 = list()
     for i in range(p):
         temp_1 = np.matmul(L - mu, k_x[i])
         k_1.append(temp_1)
         s.append(np.real(np.matmul(k_2[i], temp_1)))
-    t2 = time.time()
-    print(t2 - t1)
 
     singular = list()
     for i in range(p):
@@ -432,10 +463,8 @@ def precision_operator_norm(y, k_x, k_2, k_y, sample_y, gam_y):
 
     s_inv_sqr = list()
     for i in range(p):
-        s_inv_sqr_i = np.linalg.inv(s[i] + sing/(n ** (1/5)) * np.identity(n))
+        s_inv_sqr_i = np.linalg.inv(s[i] + scale_factor * sing / (n ** (1 / 5)) * np.identity(n))
         s_inv_sqr.append(np.real(sqrtm(s_inv_sqr_i)))
-    t3 = time.time()
-    print(t3 - t2)
 
     A = list()
     B = list()
@@ -446,8 +475,6 @@ def precision_operator_norm(y, k_x, k_2, k_y, sample_y, gam_y):
         A.append(A_i)
         B.append(B_i)
         I.append(np.linalg.pinv(B_i - np.matmul(A_i, A_i)))
-    t35 = time.time()
-    print(t35 - t3)
 
     core = np.asmatrix(np.identity(n))
     AI = list()
@@ -456,14 +483,10 @@ def precision_operator_norm(y, k_x, k_2, k_y, sample_y, gam_y):
         core = core + np.matmul(temp, A[i])
         AI.append(np.matmul(temp, k_1[i]))
     core = np.linalg.pinv(core)
-    t4 = time.time()
-    print(t4 - t35)
 
     core_AI = list()
     for i in range(p):
         core_AI.append(np.matmul(core, AI[i]))
-    t45 =time.time()
-    print(t45 - t4)
 
     pre = list()
     for i in range(p):
@@ -476,10 +499,8 @@ def precision_operator_norm(y, k_x, k_2, k_y, sample_y, gam_y):
             else:
                 pre_i.append(np.linalg.norm(np.matmul(IA[i], core_AI[j]), ord=2))
         pre.append(pre_i)
-    t5 = time.time()
-    print(t5 - t45)
-    return np.asarray(pre)
 
+    return np.asarray(pre)
 
 def upper_tri(x):
     d_1 = x.shape[0]
