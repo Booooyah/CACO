@@ -15,15 +15,13 @@ To run the codes, please make sure your Python environment has the following pac
 
 ## Example Script / Quick Start
 
-To reproduce the 5-fold cross-validation and sensitivity analysis (comparing RBF vs. Polynomial kernels, and parameter scaling) on the Model I (Tree) topology as discussed in our paper, simply run the example script: 
-
-cv_sensitivity.py
+To reproduce the 5-fold cross-validation and sensitivity analysis (comparing RBF vs. Polynomial kernels, and parameter scaling) on the Model I (Tree) topology as discussed in our paper, simply run the example script: cv_sensitivity.py
 
 This script will automatically generate synthetic functional data, apply the CACO algorithm, and output the Area Under the ROC Curve (AUC) for the estimated dynamic graphs.
 
-## Core File
+## Core Files
 
-scaco.py: Contains the core algorithmic implementations (e.g., coordinate mapping, kernel matrices generation, and precision operator norm calculation).
+caco.py: Contains the core algorithmic implementations (e.g., coordinate mapping, kernel matrices generation, and precision operator norm calculation).
 
 cv_sensitivity.py: An example script demonstrating how to tune hyperparameters and test different kernel functions using $K$-fold cross validation.
 
