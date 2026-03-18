@@ -10,7 +10,7 @@ def run_sensitivity_analysis():
     """
     # 1. Base Configuration (Focusing on Model I Tree)
     dim = 20
-    size = 150  # 稍微调小一点，防止你的电脑跑太久
+    size = 150  
     y_target_quantile = 0.5  # Validate at y=0.5
     t_type = 'balanced'
     m_type = 'Model I Tree'
